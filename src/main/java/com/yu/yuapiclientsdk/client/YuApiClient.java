@@ -6,6 +6,11 @@ import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONUtil;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.yu.yuapiclientsdk.common.ErrorCode;
+import com.yu.yuapiclientsdk.common.ResultUtils;
 import com.yu.yuapiclientsdk.entity.User;
 import com.yu.yuapiclientsdk.exception.ApiException;
 import lombok.Getter;
@@ -41,14 +46,14 @@ public class YuApiClient {
     }
 
     // 保留原有方法以保持向后兼容
-    public String getNameByGet(String name) {
+    public Object getNameByGet(String name) {
         HashMap<String, Object> paramMap = new HashMap<>();
         paramMap.put("name", name);
         String result = HttpUtil.get(gatewayUrl + "/api/user/get", paramMap);
         return result;
     }
 
-    public String getNameByPost(String name) {
+    public Object getNameByPost(String name) {
         HashMap<String, Object> paramMap = new HashMap<>();
         paramMap.put("name", name);
         String result = HttpUtil.post(gatewayUrl + "/api/user/getName", paramMap);
@@ -89,15 +94,17 @@ public class YuApiClient {
         return headerMap;
     }
 
-    public String getUserNameByPost(User user) {
+    public Object getUserNameByPost(User user) {
         String jsonStr = JSONUtil.toJsonStr(user);
         HttpResponse response = HttpRequest.post(gatewayUrl + "/api/user/getUserName")
                 .addHeaders(getHeaderMap(jsonStr))
                 .body(jsonStr)
                 .execute();
 
+        log.error("API调用失败，状态码: {}", response.getStatus());
+
         if (!response.isOk()) {
-            throw new ApiException("API调用失败，状态码: " + response.getStatus());
+            return ResultUtils.error(ErrorCode.INVOKE_ERROR);
         }
 
         return response.body();
@@ -111,7 +118,7 @@ public class YuApiClient {
      * @param params 请求参数（JSON字符串）
      * @return 接口响应结果
      */
-    public String invokeInterface(String method, String path, String params) {
+    public Object invokeInterface(String method, String path, String params) {
         return invokeInterface(method, path, params, new HashMap<>());
     }
 
@@ -124,7 +131,7 @@ public class YuApiClient {
      * @param customHeaders 自定义请求头
      * @return 接口响应结果
      */
-    public String invokeInterface(String method, String path, String params, Map<String, String> customHeaders) {
+    public Object invokeInterface(String method, String path, String params, Map<String, String> customHeaders) {
         // 构建完整URL
         String fullUrl = buildFullUrl(path);
 
@@ -153,29 +160,39 @@ public class YuApiClient {
                     response = doDelete(fullUrl, params, headers);
                     break;
                 default:
-                    throw new ApiException("不支持的请求方法: " + method);
+                    throw new ApiException(ErrorCode.PARAMS_ERROR, "不支持的请求方法: " + method);
             }
+
+            String bodyString = response.body();
+
+            // 使用 Gson 解析响应
+            JsonObject jsonObject = JsonParser.parseString(bodyString).getAsJsonObject();
+            int code = jsonObject.get("code").getAsInt();
+            // data 字段可能是多种类型
+            Object data = null;
+            Gson gson = new Gson();
+            if (!jsonObject.get("data").isJsonNull()) {
+                // 转换为 Object（实际可能会是 Map 或 List）
+                data = gson.fromJson(jsonObject.get("data"), Object.class);
+            }
+            String message = jsonObject.get("message").getAsString();
 
             // 检查响应状态
-            if (!response.isOk()) {
-                throw new ApiException(String.format(
-                        "API接口地址: %s 调用失败，状态码: %d, 响应: %s",
+            if (code != 0) { // 其他响应
+                log.error("API接口地址: {} 调用，状态码: {}, 响应: {}",
                         gatewayUrl + path,
                         response.getStatus(),
-                        response.body()
-                ));
+                        response.body());
+                return ResultUtils.error(code, message);
+            } else { // 正常响应
+                return ResultUtils.success(data);
             }
-
-            String result = response.body();
-            log.debug("接口调用成功，响应: {}", result);
-            return result;
-
         } catch (Exception e) {
             log.error("接口调用异常", e);
             if (e instanceof ApiException) {
                 throw e;
             }
-            throw new ApiException("接口调用失败: " + e.getMessage(), e);
+            return ResultUtils.error(ErrorCode.INVOKE_ERROR, e.getMessage());
         }
     }
 
@@ -270,7 +287,7 @@ public class YuApiClient {
     /**
      * 简化调用 - 使用对象作为参数
      */
-    public String invokeInterface(String method, String path, Object params) {
+    public Object invokeInterface(String method, String path, Object params) {
         String jsonParams = params != null ? JSONUtil.toJsonStr(params) : "";
         return invokeInterface(method, path, jsonParams);
     }
@@ -278,7 +295,7 @@ public class YuApiClient {
     /**
      * 简化调用 - 调用InterfaceInfo对象
      */
-    public String invokeInterface(InterfaceInfo interfaceInfo, String params) {
+    public Object invokeInterface(InterfaceInfo interfaceInfo, String params) {
         if (interfaceInfo == null) {
             throw new ApiException("接口信息不能为空");
         }
