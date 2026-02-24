@@ -30,7 +30,7 @@ public class YuApiClient {
     private final String secretKey;
 
     // 网关地址（可以配置化）
-    private String gatewayUrl = "http://localhost:8201";
+    private String gatewayUrl = "http://localhost:8090";
 
     public YuApiClient(String accessKey, String secretKey) {
         this.accessKey = accessKey;
