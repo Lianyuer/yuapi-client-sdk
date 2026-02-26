@@ -6,9 +6,7 @@ import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONUtil;
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.google.gson.*;
 import com.yu.yuapiclientsdk.common.ErrorCode;
 import com.yu.yuapiclientsdk.common.ResultUtils;
 import com.yu.yuapiclientsdk.entity.User;
@@ -165,27 +163,51 @@ public class YuApiClient {
 
             String bodyString = response.body();
 
-            // 使用 Gson 解析响应
-            JsonObject jsonObject = JsonParser.parseString(bodyString).getAsJsonObject();
-            int code = jsonObject.get("code").getAsInt();
-            // data 字段可能是多种类型
-            Object data = null;
-            Gson gson = new Gson();
-            if (!jsonObject.get("data").isJsonNull()) {
-                // 转换为 Object（实际可能会是 Map 或 List）
-                data = gson.fromJson(jsonObject.get("data"), Object.class);
-            }
-            String message = jsonObject.get("message").getAsString();
+            // 尝试解析JSON响应
+            try {
+                // 使用Gson的宽松模式解析
+                Gson gson = new GsonBuilder()
+                        .setLenient()  // 设置宽松模式，可以处理一些非标准JSON
+                        .create();
 
-            // 检查响应状态
-            if (code != 0) { // 其他响应
-                log.error("API接口地址: {} 调用，状态码: {}, 响应: {}",
-                        gatewayUrl + path,
-                        response.getStatus(),
-                        response.body());
-                return ResultUtils.error(code, message);
-            } else { // 正常响应
-                return ResultUtils.success(data);
+                JsonObject jsonObject = gson.fromJson(bodyString, JsonObject.class);
+
+                // 检查是否包含预期的字段
+                if (!jsonObject.has("code")) {
+                    log.warn("响应中没有code字段，可能是非标准格式");
+                    return ResultUtils.success(bodyString);  // 直接返回原始内容
+                }
+
+                int code = jsonObject.get("code").getAsInt();
+                Object data = null;
+                String message = jsonObject.has("message") ? jsonObject.get("message").getAsString() : "";
+
+                if (jsonObject.has("data") && !jsonObject.get("data").isJsonNull()) {
+                    data = gson.fromJson(jsonObject.get("data"), Object.class);
+                }
+
+                if (code != 0) {
+                    log.error("API接口地址: {} 调用失败，code: {}, message: {}",
+                            gatewayUrl + path, code, message);
+                    return ResultUtils.error(code, message);
+                } else {
+                    return ResultUtils.success(data);
+                }
+            } catch (JsonSyntaxException e) {
+                // JSON解析失败，说明返回的不是JSON格式
+                log.warn("接口返回的不是JSON格式，内容类型: {}, 原始内容: {}",
+                        response.header("Content-Type"), bodyString);
+
+                // 根据内容类型判断如何处理
+                String contentType = response.header("Content-Type");
+                if (contentType != null && contentType.contains("text/html")) {
+                    // 返回了HTML页面（可能是错误页面）
+                    return ResultUtils.error(ErrorCode.INVOKE_ERROR,
+                            "接口返回了HTML页面，状态码: " + response.getStatus());
+                } else {
+                    // 返回其他格式，直接返回原始内容
+                    return ResultUtils.success(bodyString);
+                }
             }
         } catch (Exception e) {
             log.error("接口调用异常", e);
